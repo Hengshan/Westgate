@@ -3,52 +3,97 @@ library(ggplot2)  # for the diamonds dataset
 library(DT)
 library(markdown)
 library(stringr)
+library(dplyr)
+library(MASS)
+library(nnet)
 
-ui <- tagList(
-  navbarPage(
+expBalance <- read.csv("Balance_Exp1.csv")
+
+ui <- navbarPage(
     theme = "cerulean","Westgate Data Visualization",
+    id = "datatype",
     tabPanel("Survey Data",
-             sidebarPanel(
-               fileInput("file1", "Choose CSV File",
-                         accept = c(
-                           "text/csv",
-                           "text/comma-separated-values,text/plain",
-                           ".csv")
-               ),
-               checkboxInput("header", "Header", TRUE),
-               tags$hr(),
-               uiOutput("toCol"),
-               uiOutput("fromCol"),
-               uiOutput("allCols")
+           sidebarPanel(
+             wellPanel(
+             fileInput("file1", "Choose Questionnaire CSV File",
+                       accept = c(
+                         "text/csv",
+                         "text/comma-separated-values,text/plain",
+                         ".csv")),
+             checkboxInput("header", "Header", TRUE),
+             checkboxInput("showdata", "Show Data Table", TRUE)
              ),
-             mainPanel(
-               tabsetPanel(
-                 id = 'dataset',
-                 
-                 tabPanel("SAM",tabsetPanel(id='sams',
-                                            tabPanel("Pre_Study",DT::dataTableOutput("mytable_SAM0")),
-                                            tabPanel("Trial1",DT::dataTableOutput("mytable_SAM1")),
-                                            tabPanel("Trial2",DT::dataTableOutput("mytable_SAM2")),
-                                            tabPanel("Trial3",DT::dataTableOutput("mytable_SAM3")),
-                                            tabPanel("Trial4",DT::dataTableOutput("mytable_SAM4"))
-                                            )),
-                
-                 tabPanel("ShortEmotion",tabsetPanel(id='emotions',
-                                             tabPanel("Pre_Study",DT::dataTableOutput("mytable_ShortEmotion0")),
-                                             tabPanel("Post_Study",DT::dataTableOutput("mytable_ShortEmotion1"))
-                                            )),
-                 tabPanel("DSSQ", tabsetPanel(id='dssqs',
-                                               tabPanel("Pre_Study",DT::dataTableOutput("mytable_DSSQ0")),
-                                               tabPanel("Post_Study",DT::dataTableOutput("mytable_DSSQ1"))
-                 )),
-                 tabPanel("SOD", DT::dataTableOutput("mytable_SOD")),
-                 tabPanel("Crowd Avoidance", DT::dataTableOutput("mytable_Crowd")),
-                 tabPanel("Demography", DT::dataTableOutput("mytable_Demography"))
-               )
+             wellPanel(
+               "Select Indepedent Variables",
+               checkboxInput("crowd_indep","Crowdedness",TRUE),
+               checkboxInput("startloc_indep","Start Location",TRUE)
+               ),
+             wellPanel(
+               HTML("<h5>Select Depedent Variables</h5>"),
+               uiOutput("selectcol"),
+               conditionalPanel("input.dataset=='SAM'||input.dataset=='ShortEmotion'||input.dataset=='DSSQ'",
+                                checkboxInput("compare_indep","Compare Trials",FALSE)),
+               
+               uiOutput("conditionalInput"),
+               selectInput('stat_method',"Choose Analysis Method:", c("Ordered Logistic Regression", 
+                                                                      "Multinomial Logistic Regression",
+                                                                      "Binomial Logistic Regression",
+                                                                      "ANOVA"))
+               ),
+               actionButton("do","Data Analysis")
              )
+           ),
+           mainPanel(
+             tabsetPanel(
+               id = 'dataset',
+               
+               tabPanel("SAM",
+                        tabsetPanel(id='sams',
+                                          tabPanel("Pre_Study",DT::dataTableOutput("mytable_SAM0")),
+                                          tabPanel("Trial1",DT::dataTableOutput("mytable_SAM1")),
+                                          tabPanel("Trial2",DT::dataTableOutput("mytable_SAM2")),
+                                          tabPanel("Trial3",DT::dataTableOutput("mytable_SAM3")),
+                                          tabPanel("Trial4",DT::dataTableOutput("mytable_SAM4"))
+                                          )),
+              
+               tabPanel("ShortEmotion",tabsetPanel(id='emotions',
+                                           tabPanel("Pre_Study",DT::dataTableOutput("mytable_ShortEmotion0")),
+                                           tabPanel("Post_Study",DT::dataTableOutput("mytable_ShortEmotion1"))
+                                          )),
+               tabPanel("DSSQ", tabsetPanel(id='dssqs',
+                                             tabPanel("Pre_Study",DT::dataTableOutput("mytable_DSSQ0")),
+                                             tabPanel("Post_Study",DT::dataTableOutput("mytable_DSSQ1"))
+               )),
+               tabPanel("SOD", DT::dataTableOutput("mytable_SOD")),
+               tabPanel("CrowdAvoidance", DT::dataTableOutput("mytable_Crowd")),
+               tabPanel("Demography", DT::dataTableOutput("mytable_Demography"))
+             ),
+             tabsetPanel(
+               id = 'report',
+               tabPanel("Histogram",plotOutput("plot")),
+               tabPanel("Stats",verbatimTextOutput("stat")),
+               tabPanel("Summary",verbatimTextOutput("summary"))
+             )
+        ),
+    
+    tabPanel("Route Choice", 
+             sidebarPanel(
+            fileInput("file2", "Choose Route Choice CSV File",
+                      accept = c(
+                        "text/csv",
+                        "text/comma-separated-values,text/plain",
+                        ".csv")
+            ),
+      checkboxInput("header", "Header", TRUE),
+      tags$hr()
     ),
-    tabPanel("Route Choice", "This panel is intentionally left blank"),
-    tabPanel("Physio", "This panel is intentionally left blank"),
+    mainPanel(
+      tabsetPanel(
+        id = 'dataset_route'
+      )
+    )),
+    tabPanel("Physio", 
+             "This panel is intentionally left blank"),
     navbarMenu("More",
                tabPanel("Contact Us",
                         "Contact Us"
@@ -61,147 +106,302 @@ ui <- tagList(
                         )
                )
     )
-  )
 )
 
+
+
 server <- function(input, output, session) {
-  
+  df <- data.frame()
+  df_current <- data.frame()
+
   filedata <- reactive({
-    infile <- input$file1
-    if (is.null(infile)) {
-      # User has not uploaded a file yet
-      return(NULL)
-    }
-    read.csv(infile$datapath, header = input$header)
+    # infile <- input$file1
+    # if (is.null(infile)) {
+    #   # User has not uploaded a file yet
+    #   return(NULL)
+    # }
+    # df <<- read.csv(infile$datapath, header = input$header)
+    df <<- read.csv("data.csv", header = input$header)
   })
   
-  cleanData <- function(x){
+  setdata <- reactive({
+    df <- filedata()
+    if (!is.data.frame(df) || nrow(df)==0 ||!is.data.frame(expBalance) || nrow(expBalance)==0) return(NULL)
+    df_show <- list()
+    df_show[[1]] <- merge(df[,18:21],expBalance[,1:5],by="SubID")
+    df_show[[2]] <- merge(df[,c(18,22:32)],expBalance[,1:5],by="SubID")
+    
+    temp <- sapply(df[,c(18,86:115)],function(x) {
       if (!grepl("^[[:digit:]]+$", x)){
-        str_sub(x,-1)}
+        as.integer(str_sub(x,-1))}
       else{
-        x
-      }
-    }
+        as.integer(x)
+      }})
+    df_show[[3]] <-merge(temp,expBalance[,1:5],by="SubID")
+    df_show[[4]] <-merge(df[,c(18,63:65)],expBalance[,1:5],by="SubID")
+    df_show[[5]] <-merge(df[,c(18,66:68)],expBalance[,1:5],by="SubID")
+    df_show[[6]] <-merge(df[,c(18,69:71)],expBalance[,1:5],by="SubID")
+    df_show[[7]] <-merge(df[,c(18,72:74)],expBalance[,1:5],by="SubID")
+    df_show[[8]] <-merge(df[,c(18,75:85)],expBalance[,1:5],by="SubID")
+    temp2 <- sapply(df[,c(18,86:115)],function(x) {
+      if (!grepl("^[[:digit:]]+$", x)){
+        as.integer(str_sub(x,-1))}
+      else{
+        as.integer(x)
+      }})
+    df_show[[9]] <-merge(temp2,expBalance[,1:5],by="SubID")
+    
+    temp3 <- sapply(df[,c(18,116:130)],function(x) {
+      if (!grepl("^[[:digit:]]+$", x)){
+        as.integer(str_sub(x,1,1))}
+      else{
+        as.integer(x)
+      }})
+    
+    df_show[[10]] <-merge(temp3,expBalance[,1:5],by="SubID")
+    df_show[[11]] <-merge(df[,c(18,131:135)],expBalance[,1:5],by="SubID")
+    df_show[[12]] <-merge(df[,c(18,136:140)],expBalance[,1:5],by="SubID")
+    df_show
+  })
   
-  # Read specific columns
+  
+  ############# Read specific columns
   output$mytable_SAM0 <- DT::renderDataTable({
-    df=filedata()
-    df[,18:21]
+      getcurdata()
   })
   
   output$mytable_ShortEmotion0 <- DT::renderDataTable({
-    df=filedata()
-    df[,c(18,22:32)]
+    getcurdata()
   })
-  
+
   output$mytable_DSSQ0 <- DT::renderDataTable({
-    df=filedata()
-    sapply(df[,c(18,33:62)],function(x) {
-      if (!grepl("^[[:digit:]]+$", x)){
-        str_sub(x,-1)}
-      else{
-        x
-      }
-    })
+    getcurdata()
   })
 
-  
+
   output$mytable_SAM1 <- DT::renderDataTable({
-    df=filedata()
-    df[,c(18,63:65)]
+    getcurdata()
+
   })
-  
+
   output$mytable_SAM2 <- DT::renderDataTable({
-    df=filedata()
-    df[,c(18,66:68)]
+    getcurdata()
+
   })
-  
+
   output$mytable_SAM3 <- DT::renderDataTable({
-    df=filedata()
-    df[,c(18,69:71)]
+    getcurdata()
+
   })
-  
+
   output$mytable_SAM4 <- DT::renderDataTable({
-    df=filedata()
-    df[,c(18,72:74)]
+    getcurdata()
   })
-  
+
   output$mytable_ShortEmotion1 <- DT::renderDataTable({
-    df=filedata()
-    df[,c(18,75:85)]
+    getcurdata()
+
   })
-  
+
   output$mytable_DSSQ1 <- DT::renderDataTable({
-    df=filedata()
-    sapply(df[,c(18,86:115)],function(x) {
-      if (!grepl("^[[:digit:]]+$", x)){
-        str_sub(x,-1)}
-      else{
-        x
-      }})
+    getcurdata()
   })
-  
+
   output$mytable_SOD <- DT::renderDataTable({
-    df=filedata()
-    sapply(df[,c(18,116:130)],function(x) {
-      if (!grepl("^[[:digit:]]+$", x)){
-        str_sub(x,1,1)}
-      else{
-        x
-      }})
+    getcurdata()
   })
-  
+
   output$mytable_Crowd <- DT::renderDataTable({
-    df=filedata()
-    df[,c(18,131:135)]
+    getcurdata()
   })
-  
+
   output$mytable_Demography <- DT::renderDataTable({
-    df=filedata()
-    df[,c(18,136:140)]
+    getcurdata()
   })
   
-  output$fromCol <- renderUI({
-    df <-filedata()
-    if (is.null(df)) return(NULL)
-    
-    items=names(df)
-    names(items)=items
-    selectInput("from", "From:",items)
-    
-  })
-  
-  output$toCol <- renderUI({
-    df <-filedata()
-    if (is.null(df)) return(NULL)
-    
-    items=names(df)
-    names(items)=items
-    selectInput("to", "To:",items)
-  })
-  
-  output$allCols <- renderUI({
-    df <-filedata()
-    if (is.null(df)) return(NULL)
-    
-    items=names(df)
-    names(items)=items
-    checkboxGroupInput("show_vars", "Choose Columns to show:",
-                       names(items))
-  })
-
-  selectedCols <- reactive({
-    
-    fromCol <- input$from
-    fromTo <- input$to
-    if (is.null(infile)) {
-      # User has not uploaded a file yet
-      return(NULL)
+  getcurdata <- eventReactive(c(input$showdata,input$dataset,input$sams,input$emotions,input$dssqs,input$file1), {
+    mydata <- setdata()
+    if(input$dataset=="SAM")
+    {
+      if(input$sams=="Pre_Study")
+      {
+        df_current <<-  mydata[[1]]
+        return(df_current)
+      }else if (input$sams=="Trial1")
+      {
+        df_current <<-  mydata[[4]]
+      }else if (input$sams=="Trial2")
+      {
+        df_current <<-  mydata[[5]]
+      }else if (input$sams=="Trial3")
+      {
+        df_current <<-  mydata[[6]]
+      }else if (input$sams=="Trial4")
+      {
+        df_current <<-  mydata[[7]]
+      }
+      
+    }else if (input$dataset=="ShortEmotion")
+    {
+      if(input$emotions=="Pre_Study")
+      {
+        df_current <<-  mydata[[2]]
+        
+      }else if (input$emotions=="Post_Study")
+      {
+        df_current <<-  mydata[[8]]
+      }
+    }else if (input$dataset=="DSSQ")
+    {
+      if(input$dssqs=="Pre_Study")
+      {
+        df_current <<-  mydata[[3]]
+      }else if (input$dssqs=="Post_Study")
+      {
+        df_current <<-  mydata[[9]]
+      }
+      
+    }else if (input$dataset=="SOD")
+    {
+      df_current <<-  mydata[[10]]
     }
-    read.csv(infile$datapath, header = input$header)
+    else if (input$dataset=="CrowdAvoidance")
+    {
+      df_current <<-  mydata[[11]]
+    }else if (input$dataset=="Demography")
+    {
+      df_current <<-  mydata[[12]]
+    }
+  })
+  
+
+
+  ###########update UI
+  renderCondInput <- eventReactive(c(input$dataset),{
+    print(input$dataset)
+    if(input$dataset == 'SAM')
+    {
+      checkboxGroupInput("comp1","Compare Between Trials",c("Pre_Study","Trial1","Trial2","Trial3","Trial4"))
+    }else if (input$dataset == 'ShortEmotion'||input$dataset == 'DSSQ'){
+      checkboxGroupInput("comp2","Compare Pre/Post",c("Pre_Study","Post_Study"))
+    }
+  })
+  
+  output$conditionalInput <- renderUI({
+    if(input$compare_indep){
+      renderCondInput()
+    }
   })
 
+  output$selectcol <- renderUI({
+    tempdf <- renderSum()
+    if(length(names(tempdf))>1)
+    {selectInput("selected", "Choose Column:",
+                names(tempdf),selected = names(tempdf)[2])}
+    else{
+      selectInput("selected", "Choose Column:",
+                  names(tempdf))
+    }
+  })
+
+  #only summarize and select numberic fields
+  renderSum <- eventReactive(c(input$dataset,input$sams,input$emotions,input$dssqs,input$file1),{
+    select_if(df_current, is.numeric)
+    })
   
+  output$summary <- renderPrint({
+    summary(renderSum())
+  })
+
+  rePlot <- eventReactive(c(input$selected,input$crowd_indep,input$startloc_indep),{
+    ggplot(df_current, aes(x=df_current[,input$selected])) +
+      geom_histogram(color="black", fill="blue")+
+      if(input$crowd_indep&&input$startloc_indep)
+      {facet_grid(Start_Location~Crowdedness)}
+      else if (input$crowd_indep){
+        facet_grid(.~Crowdedness)
+      }else if (input$startloc_indep){
+        facet_grid(.~Start_Location)
+      }
+  })
+  
+
+  output$plot <- renderPlot({
+    if (is.null(input$selected)||input$selected=="") {
+      return(NULL)
+    }else{
+      rePlot()  
+    }
+  })
+  
+  #### Start data analysis
+  reStatPlot <- eventReactive(input$do,{
+    # choose different data analysis
+    
+    if(input$stat_method=="Ordered Logistic Regression"){  #for example, SAM data, 1-9 scale 
+      df_current[,input$selected] <- as.factor(df_current[,input$selected])
+      
+      #indepdent variables
+      if(input$crowd_indep&&input$startloc_indep)
+        m <- polr(df_current[,input$selected] ~ Crowdedness + Start_Location, data = df_current, Hess=TRUE)
+      else if (input$crowd_indep){
+        m <- polr(df_current[,input$selected] ~ Crowdedness, data = df_current, Hess=TRUE)
+      }else if (input$startloc_indep){
+        m <- polr(df_current[,input$selected] ~ Start_Location, data = df_current, Hess=TRUE)
+      }
+      
+    }else if (input$stat_method=="Multinomial Logistic Regression"){ # may not be used in this study, for unordered categorical data
+      df_current[,input$selected] <- as.factor(df_current[,input$selected])
+      
+      
+      if(input$crowd_indep&&input$startloc_indep)
+        m <- multinom(df_current[,input$selected] ~Crowdedness + Start_Location,data = df_current)
+      else if (input$crowd_indep){
+        m <- multinom(df_current[,input$selected] ~Crowdedness,data = df_current)
+      }else if (input$startloc_indep){
+        m <- multinom(df_current[,input$selected] ~Start_Location,data = df_current)
+      }
+      
+    }else if (input$stat_method=="Binomial Logistic Regression"){# for route choice
+      df_current[,input$selected] <- as.factor(df_current[,input$selected])
+      
+    }else if (input$stat_method=="ANOVA"){  # for continous depedent variables, for example, for user perception of crowdedness 1-100 can be treated as continous
+      
+    }
+ 
+    
+    m
+  })
+  
+  output$stat <- renderPrint({
+    ctable <- summary(reStatPlot())
+    
+    if(input$stat_method=="Ordered Logistic Regression"){  #for example, SAM data, 1-9 scale 
+      p <- pnorm(abs(ctable$coefficients[, "t value"]), lower.tail = FALSE) * 2
+      ctable$coefficients <- cbind(ctable$coefficients, "p value" = p)
+      ctable$coefficients <- cbind(ctable$coefficients,"exp value"=exp(ctable$coefficients[,1]))
+      return(ctable)
+      
+    }else if (input$stat_method=="Multinomial Logistic Regression"){ # may not be used in this study, for unordered categorical data
+      
+      tvalue <- as.data.frame(ctable$coefficients/ctable$standard.errors)
+      pvalue <- sapply(tvalue,function(x){
+        pnorm(abs(x), lower.tail = FALSE) * 2
+      })
+      return(cbind(ctable$coefficients,"tvalue"=tvalue, "pvalue"=pvalue, "expvalue"=exp(ctable$coefficients)))
+      
+    }else if (input$stat_method=="Binomial Logistic Regression"){# for route choice
+      
+      
+    }else if (input$stat_method=="ANOVA"){  # for continous depedent variables, for example, for user perception of crowdedness 1-100 can be treated as continous
+      
+    }
+    
+    
+    
+  })
+  
+
 }
 
 shinyApp(ui, server)
