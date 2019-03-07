@@ -6,22 +6,32 @@ library(stringr)
 library(dplyr)
 library(MASS)
 library(nnet)
+library(lme4)
+library(data.table)
+library(ez)
+library(multcomp)
+library(plotly)
+library(sf)
 
 expBalance <- read.csv("Balance_Exp1.csv")
 
+# UI ----------------------------------------------------------------------
 ui <- navbarPage(
     theme = "cerulean","Westgate Data Visualization",
     id = "datatype",
+
+# SurveyData --------------------------------------------------------------
     tabPanel("Survey Data",
-           sidebarPanel(
+           sidebarLayout(
+             # SurveyData_Sidebar ------------------------------------------------------
+             sidebarPanel(
              wellPanel(
              fileInput("file1", "Choose Questionnaire CSV File",
                        accept = c(
                          "text/csv",
                          "text/comma-separated-values,text/plain",
                          ".csv")),
-             checkboxInput("header", "Header", TRUE),
-             checkboxInput("showdata", "Show Data Table", TRUE)
+             checkboxInput("header", "Header", TRUE)
              ),
              wellPanel(
                "Select Indepedent Variables",
@@ -41,8 +51,8 @@ ui <- navbarPage(
                                                                       "ANOVA"))
                ),
                actionButton("do","Data Analysis")
-             )
            ),
+           # SurveyData_mainpage ------------------------------------------------------
            mainPanel(
              tabsetPanel(
                id = 'dataset',
@@ -70,12 +80,16 @@ ui <- navbarPage(
              ),
              tabsetPanel(
                id = 'report',
-               tabPanel("Histogram",plotOutput("plot")),
+               tabPanel("Plots",
+                        selectInput("plot_type","Plot Tyle:", c("Histgram","Box graph","Bar chart")),
+                        plotlyOutput("plot2")
+                        ),
                tabPanel("Stats",verbatimTextOutput("stat")),
                tabPanel("Summary",verbatimTextOutput("summary"))
              )
-        ),
-    
+        ))),
+
+# RouteChoice -------------------------------------------------------------
     tabPanel("Route Choice", 
              sidebarPanel(
             fileInput("file2", "Choose Route Choice CSV File",
@@ -84,16 +98,24 @@ ui <- navbarPage(
                         "text/comma-separated-values,text/plain",
                         ".csv")
             ),
-      checkboxInput("header", "Header", TRUE),
-      tags$hr()
+      checkboxInput("header2", "Header", TRUE),
+      fileInput("file_shape", "Choose ShapeFile",
+                accept = c(".shp")
+      )
     ),
     mainPanel(
       tabsetPanel(
-        id = 'dataset_route'
+        id = 'dataset_route',
+        tabPanel("Data",DT::dataTableOutput("mytable_route")),
+        tabPanel("Plot 3D",plotlyOutput("plot3D"))
       )
     )),
+
+# Physio and More ---------------------------------------------------------
+
     tabPanel("Physio", 
              "This panel is intentionally left blank"),
+
     navbarMenu("More",
                tabPanel("Contact Us",
                         "Contact Us"
@@ -110,10 +132,13 @@ ui <- navbarPage(
 
 
 
+# Server ------------------------------------------------------------------
 server <- function(input, output, session) {
-  df <- data.frame()
+  df <- data.frame()  #questionnare data
+  df_route <- data.frame()  #survey data
   df_current <- data.frame()
-
+  
+  # read questionnare data
   filedata <- reactive({
     # infile <- input$file1
     # if (is.null(infile)) {
@@ -124,6 +149,18 @@ server <- function(input, output, session) {
     df <<- read.csv("data.csv", header = input$header)
   })
   
+  # read survey data
+  filedata2 <- reactive({
+    infile <- input$file2
+    if (is.null(infile)) {
+      # User has not uploaded a file yet
+      return(NULL)
+    }
+    df_route <<- read.csv(infile$datapath, header = input$header2)
+  })
+
+# Phrase Data -------------------------------------------------------------
+
   setdata <- reactive({
     df <- filedata()
     if (!is.data.frame(df) || nrow(df)==0 ||!is.data.frame(expBalance) || nrow(expBalance)==0) return(NULL)
@@ -164,10 +201,9 @@ server <- function(input, output, session) {
     df_show
   })
   
-  
-  ############# Read specific columns
+# Show All table panels ---------------------------------------------------
   output$mytable_SAM0 <- DT::renderDataTable({
-      getcurdata()
+    getcurdata()
   })
   
   output$mytable_ShortEmotion0 <- DT::renderDataTable({
@@ -219,7 +255,16 @@ server <- function(input, output, session) {
     getcurdata()
   })
   
-  getcurdata <- eventReactive(c(input$showdata,input$dataset,input$sams,input$emotions,input$dssqs,input$file1), {
+  output$mytable_route <- DT::renderDataTable({
+    getroutedata()
+  })
+  
+  getroutedata <- eventReactive(input$file2,{
+    filedata2()
+  })
+  
+# Get Current Data --------------------------------------------------------
+  getcurdata <- eventReactive(c(input$dataset,input$sams,input$emotions,input$dssqs,input$file1), {
     mydata <- setdata()
     if(input$dataset=="SAM")
     {
@@ -273,10 +318,10 @@ server <- function(input, output, session) {
       df_current <<-  mydata[[12]]
     }
   })
-  
 
 
-  ###########update UI
+
+# Update UI ---------------------------------------------------------------
   renderCondInput <- eventReactive(c(input$dataset),{
     print(input$dataset)
     if(input$dataset == 'SAM')
@@ -312,29 +357,56 @@ server <- function(input, output, session) {
   output$summary <- renderPrint({
     summary(renderSum())
   })
+  
 
-  rePlot <- eventReactive(c(input$selected,input$crowd_indep,input$startloc_indep),{
-    ggplot(df_current, aes(x=df_current[,input$selected])) +
-      geom_histogram(color="black", fill="blue")+
-      if(input$crowd_indep&&input$startloc_indep)
-      {facet_grid(Start_Location~Crowdedness)}
+# PlotlyGraph -------------------------------------------------------------
+
+  rePlot2 <- eventReactive(c(input$selected,input$crowd_indep,input$startloc_indep,input$plot_type),{
+    #clear stat first
+    
+    if(input$plot_type=="Histgram")
+    {
+      p <- ggplot(df_current, aes(x=df_current[,input$selected]))
+      p <- p+geom_histogram(color="black", fill="blue")
+      p <- p+
+        if(input$crowd_indep&&input$startloc_indep)
+        {facet_grid(Start_Location~Crowdedness)}
       else if (input$crowd_indep){
         facet_grid(.~Crowdedness)
       }else if (input$startloc_indep){
         facet_grid(.~Start_Location)
       }
+      return(ggplotly(p))
+    }else if (input$plot_type=="Bar chart"){
+      Animals <- c("giraffes", "orangutans", "monkeys")
+      SF_Zoo <- c(20, 14, 23)
+      LA_Zoo <- c(12, 18, 29)
+      data <- data.frame(Animals, SF_Zoo, LA_Zoo)
+      
+      p <- plot_ly(df_current, x = ~Crowdedness, y = ~df_current[,input$selected], type = 'bar', name = input$selected) %>%
+        layout(yaxis = list(title = 'Count'), barmode = 'group')
+    }
+  }) 
+  
+  output$plot2 <- renderPlotly({
+    rePlot2()
   })
   
 
-  output$plot <- renderPlot({
-    if (is.null(input$selected)||input$selected=="") {
-      return(NULL)
-    }else{
-      rePlot()  
-    }
+# Plotly3D Graph ----------------------------------------------------------
+  rePlot3D <- eventReactive(c(input$file_shape,input$dataset_route),{
+    shapedata <- sf::st_read("mygeodata/Westgate_Floorplans32_changedFloor-line.shp", quiet = TRUE)
+    shapedata <- highlight_key(shapedata)
+    data <- shapedata$data()
+    plot_ly(data, z = ~Z) %>% 
+      layout(autosize = T, width = 800, height = 800)
+  }) 
+  output$plot3D <- renderPlotly({
+    rePlot3D()
   })
   
-  #### Start data analysis
+
+# Data analysis -----------------------------------------------------
   reStatPlot <- eventReactive(input$do,{
     # choose different data analysis
     
@@ -365,11 +437,23 @@ server <- function(input, output, session) {
     }else if (input$stat_method=="Binomial Logistic Regression"){# for route choice
       df_current[,input$selected] <- as.factor(df_current[,input$selected])
       
-    }else if (input$stat_method=="ANOVA"){  # for continous depedent variables, for example, for user perception of crowdedness 1-100 can be treated as continous
+      if(input$crowd_indep&&input$startloc_indep)
+        m <- glm(df_current[,input$selected] ~ Crowdedness + Start_Location,data = df_current, family = binomial)
+      else if (input$crowd_indep){
+        m <- glm(df_current[,input$selected] ~ Crowdedness,data = df_current, family = binomial)
+      }else if (input$startloc_indep){
+        m <- glm(df_current[,input$selected] ~Start_Location,data = df_current, family = binomial)
+      }
       
+    }else if (input$stat_method=="ANOVA"){  # for continous depedent variables, for example, for user perception of crowdedness 1-100 can be treated as continous
+      if(input$crowd_indep&&input$startloc_indep)
+        m = lm(df_current[,input$selected]~Crowdedness+Start_Location, data=df_current)
+      else if (input$crowd_indep){
+        m = lm(df_current[,input$selected]~Crowdedness, data=df_current)
+      }else if (input$startloc_indep){
+        m = lm(df_current[,input$selected]~Start_Location, data=df_current)
+      }
     }
- 
-    
     m
   })
   
@@ -391,17 +475,12 @@ server <- function(input, output, session) {
       return(cbind(ctable$coefficients,"tvalue"=tvalue, "pvalue"=pvalue, "expvalue"=exp(ctable$coefficients)))
       
     }else if (input$stat_method=="Binomial Logistic Regression"){# for route choice
-      
+      return(ctable)
       
     }else if (input$stat_method=="ANOVA"){  # for continous depedent variables, for example, for user perception of crowdedness 1-100 can be treated as continous
-      
+      return(anova(reStatPlot()))
     }
-    
-    
-    
   })
-  
-
 }
 
 shinyApp(ui, server)
